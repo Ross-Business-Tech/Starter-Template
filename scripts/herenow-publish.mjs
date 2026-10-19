@@ -24,7 +24,8 @@
  *   HERENOW_ACCESS          applied when a site is CREATED: public | members | <domain>[,<domain>]
  *                           (default: public when HERENOW_WORKSPACE is set, otherwise untouched)
  *   HERENOW_LABEL           workspace label for a NEW site, e.g. the repo name, giving
- *                           https://<label>.<workspace>.here.now/ (here.now auto-suffixes collisions)
+ *                           https://<label>.<workspace>.here.now/. Sent on finalize; a taken label
+ *                           gets -2 ... -5, then here.now generates one.
  *   HERENOW_FOLDER          dashboard folder (default: package name). Previews go in "<folder> previews".
  *   HERENOW_DIST_DIR        build output dir (default: dist)
  *   HERENOW_SPA             "0" disables SPA fallback routing (default on)
@@ -289,8 +290,7 @@ async function main() {
   }
   if (!slug) {
     log('→ Creating a new here.now site…');
-    const label = (env.HERENOW_LABEL || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
-    res = api('POST', '/api/v1/publish', WORKSPACE && AUTHED && label ? { ...body, workspaceLabel: label } : body);
+    res = api('POST', '/api/v1/publish', body);
     if (!ok(res)) die(explain(res, 'Creating the site'));
     created = true;
   }
@@ -328,7 +328,19 @@ async function main() {
 
   // 5. Finalize (the site is not live until this succeeds)
   log('→ Finalizing…');
-  const fin = api('POST', up.finalizeUrl, { versionId: up.versionId });
+  // here.now takes the workspace label on FINALIZE (openapi: FinalizePublishRequest.workspaceLabel),
+  // not on create. Only for a newly created workspace site, so updates never rename or re-suffix it.
+  // Explicit labels are strict (a taken label returns 409), so try label, label-2 ... label-5, then
+  // let here.now generate one rather than leave the site unpublished.
+  const label = (env.HERENOW_LABEL || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  const tries = created && WORKSPACE && AUTHED && label ? [label, ...[2, 3, 4, 5].map((n) => `${label}-${n}`), null] : [null];
+  let fin;
+  for (const l of tries) {
+    fin = api('POST', up.finalizeUrl, l ? { versionId: up.versionId, workspaceLabel: l } : { versionId: up.versionId });
+    const taken = fin.status === 409 && /label/i.test(`${fin.json?.code || ''} ${fin.json?.error || ''}`);
+    if (!taken) break;
+    log(`  workspace label "${l}" is already taken; trying the next option`);
+  }
   if (!ok(fin) || fin.json?.success === false) die(explain(fin, 'Finalizing'));
   const f = fin.json || {};
   for (const w of f.warnings || []) log(`  ⚠ here.now warning: ${typeof w === 'string' ? w : JSON.stringify(w)}`);
