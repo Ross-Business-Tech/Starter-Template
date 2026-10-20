@@ -10,7 +10,10 @@
  *             API key    -> your here.now account, expires 7 days after last publish.
  *             Re-running updates the same link (state kept in .herenow-preview.json, gitignored).
  * pr-preview  Team key, expires 7 days after last publish. Refuses to run outside CI.
- * production  Team key, permanent. Refuses to run outside CI.
+ * production  Team key, permanent, into the workspace (main branch). Refuses to run outside CI.
+ *             HERENOW_COMING_SOON=1 publishes a "Coming soon" page (team name only) instead of the app.
+ * development Same key, permanent, OUTSIDE the workspace (the key owner's personal account), so the
+ *             site keeps an unguessable address (development branch). Refuses to run outside CI.
  *
  * Environment
  *   HERENOW_API_KEY         API key (else ~/.herenow/credentials). Required for CI modes.
@@ -20,6 +23,9 @@
  *                           authenticated requests). In preview mode it requires a signed-in student:
  *                           see scripts/herenow-login.mjs.
  *   HERENOW_PROD_SLUG       production site slug (repo variable).
+ *   HERENOW_DEV_SLUG        development site slug (repo variable).
+ *   HERENOW_COMING_SOON     "1" (production only): publish the Coming soon page, not the build.
+ *   HERENOW_TEAM_NAME       team name shown on the Coming soon page.
  *   HERENOW_SLUG            explicit slug to update (pr-preview uses this).
  *   HERENOW_ACCESS          applied when a site is CREATED: public | members | <domain>[,<domain>]
  *                           (default: public when HERENOW_WORKSPACE is set, otherwise untouched)
@@ -46,16 +52,17 @@ import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 const env = process.env;
-const MODES = ['preview', 'pr-preview', 'production'];
+const MODES = ['preview', 'pr-preview', 'production', 'development'];
 const MODE = process.argv[2] || 'preview';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const API = (env.HERENOW_API_BASE || 'https://here.now').replace(/\/+$/, '');
 const API_ORIGIN = new URL(API).origin;
-const DIST = path.resolve(ROOT, env.HERENOW_DIST_DIR || 'dist');
+let DIST = path.resolve(ROOT, env.HERENOW_DIST_DIR || 'dist'); // replaced by a temp dir for Coming soon
 const STATE_FILE = path.join(ROOT, '.herenow-preview.json');
 const IN_CI = env.GITHUB_ACTIONS === 'true';
 const CLIENT = env.HERENOW_CLIENT || `${IN_CI ? 'github-actions' : 'claude-code'}/ross-herenow-publish`;
-const WORKSPACE = (env.HERENOW_WORKSPACE || '').trim().toLowerCase() // accepts "name" or "name.here.now"
+// development sites never go into the workspace: outside it they keep an unguessable slug address.
+const WORKSPACE = MODE === 'development' ? '' : (env.HERENOW_WORKSPACE || '').trim().toLowerCase() // accepts "name" or "name.here.now"
   .replace(/^https?:\/\//, '').replace(/\.here\.now\/?$/, '');
 const PREVIEW_TTL = 7 * 24 * 60 * 60;
 const MAX_FILES = 2500;
@@ -189,6 +196,22 @@ async function pool(items, size, fn) {
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
 }
 
+// Static "Coming soon" page: team name only, no external resources, not indexed.
+function comingSoonPage(name) {
+  const esc = String(name).slice(0, 80).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>${esc} | Coming soon</title>
+<style>
+html,body{height:100%;margin:0}body{display:flex;align-items:center;justify-content:center;background:#00274c;color:#fff;
+font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;padding:24px;box-sizing:border-box}
+h1{font-size:clamp(2rem,7vw,4rem);margin:0 0 .4em;line-height:1.1}p{margin:0;font-size:clamp(1rem,3.5vw,1.5rem);color:#ffcb05;
+letter-spacing:.2em;text-transform:uppercase}
+</style></head>
+<body><main><h1>${esc}</h1><p>Coming soon</p></main></body></html>
+`;
+}
+
 // ---------- main ----------
 async function main() {
   if (!MODES.includes(MODE)) die(`unknown mode "${MODE}". Use one of: ${MODES.join(', ')}.`);
@@ -208,8 +231,14 @@ async function main() {
   const pkg = readJson(path.join(ROOT, 'package.json')) || {};
   const appName = (env.HERENOW_APP_NAME || pkg.name || path.basename(ROOT)).slice(0, 50);
 
-  // 1. Build
-  if (env.HERENOW_SKIP_BUILD !== '1' && pkg.scripts?.build) {
+  // 1. Build (or generate the Coming soon page, which needs no project code at all)
+  const comingSoon = env.HERENOW_COMING_SOON === '1';
+  if (comingSoon && MODE !== 'production') die('HERENOW_COMING_SOON only applies to production.');
+  if (comingSoon) {
+    DIST = fs.mkdtempSync(path.join(os.tmpdir(), 'herenow-soon-'));
+    fs.writeFileSync(path.join(DIST, 'index.html'), comingSoonPage(env.HERENOW_TEAM_NAME || appName));
+    log('→ Publishing the Coming soon page instead of the app');
+  } else if (env.HERENOW_SKIP_BUILD !== '1' && pkg.scripts?.build) {
     log('→ Building (npm run build)…');
     // The build runs project code and npm packages, so it never gets the here.now key.
     const buildEnv = { ...process.env };
@@ -240,7 +269,7 @@ async function main() {
     }
     files.push({ path: p, size: buf.length, contentType: contentType(p), hash: sha256(buf) });
   }
-  if (fs.existsSync(path.join(ROOT, 'public', '.herenow')) && !paths.some((p) => p.startsWith('.herenow/'))) {
+  if (!comingSoon && fs.existsSync(path.join(ROOT, 'public', '.herenow')) && !paths.some((p) => p.startsWith('.herenow/'))) {
     log(`  ⚠ public/.herenow/ exists but nothing from it reached ${distRel}/. Site Data / proxy manifests will be missing.`);
   }
   const usesPlatform = paths.filter((p) => p === '.herenow/data.json' || p === '.herenow/proxy.json');
@@ -258,20 +287,27 @@ async function main() {
       die('no production site is configured yet. Run this workflow once by hand (GitHub > Actions > "here.now" >\n' +
         '  Run workflow, on main) to create it, then save the printed slug as repository variable HERENOW_PROD_SLUG.');
     }
+  } else if (MODE === 'development') {
+    slug = (env.HERENOW_DEV_SLUG || '').trim();
+    if (!slug && env.GITHUB_EVENT_NAME !== 'workflow_dispatch' && env.HERENOW_ALLOW_LOCAL !== '1') {
+      die('no development site is configured yet. Run this workflow once by hand on the development branch\n' +
+        '  to create it, then save the printed slug as repository variable HERENOW_DEV_SLUG.');
+    }
   } else if (MODE === 'preview' && !slug && state.api === API && state.authed === AUTHED) {
     slug = state.slug || '';
   }
 
   const branch = env.GITHUB_HEAD_REF || gitBranch();
   const displayName = (MODE === 'production' ? appName
-    : MODE === 'pr-preview' ? `${appName} · PR #${env.HERENOW_PR_NUMBER || '?'}`
-      : `${appName} · preview${branch && branch !== 'HEAD' ? ` (${branch})` : ''}`).slice(0, 80);
+    : MODE === 'development' ? `${appName} · development`
+      : MODE === 'pr-preview' ? `${appName} · PR #${env.HERENOW_PR_NUMBER || '?'}`
+        : `${appName} · preview${branch && branch !== 'HEAD' ? ` (${branch})` : ''}`).slice(0, 80);
 
   const body = { files, spaMode: env.HERENOW_SPA !== '0', displayName };
   if (AUTHED) {
-    if (MODE !== 'production') body.ttlSeconds = PREVIEW_TTL;
+    if (MODE === 'preview' || MODE === 'pr-preview') body.ttlSeconds = PREVIEW_TTL;
     const folder = (env.HERENOW_FOLDER || appName).slice(0, 48);
-    body.folder = MODE === 'production' ? folder : `${folder} previews`;
+    body.folder = MODE === 'production' ? folder : MODE === 'development' ? `${folder} dev` : `${folder} previews`;
   }
 
   let res;
@@ -385,7 +421,7 @@ async function main() {
 
   const lasts = !expiresAt && ps.persistence === 'permanent' ? 'permanent'
     : expiresAt ? `until ${new Date(expiresAt).toUTCString()}${AUTHED ? '' : ' (anonymous: 24 hours)'}`
-      : AUTHED ? (MODE === 'production' ? 'permanent' : '7 days after the last publish') : '24 hours (anonymous)';
+      : AUTHED ? (MODE === 'production' || MODE === 'development' ? 'permanent' : '7 days after the last publish') : '24 hours (anonymous)';
   const liveNote = live === 200 ? 'OK (HTTP 200)'
     : liveBlocked ? 'not checked (*.here.now is not in Allowed domains; the link itself is fine)'
       : live ? `HTTP ${live} (expected if the site requires sign-in)` : 'not checked (could not reach *.here.now from here)';
@@ -405,8 +441,9 @@ async function main() {
   if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, `url=${url}\nslug=${slug}\ncreated=${created}\n`);
   if (env.GITHUB_STEP_SUMMARY) {
     const lines = [`### here.now ${MODE}`, '', `- Link: ${url}`, `- Slug: \`${slug}\``, `- Lasts: ${lasts}`];
-    if (MODE === 'production' && created) {
-      lines.push('', `**First production deploy.** Set repository variable \`HERENOW_PROD_SLUG\` to \`${slug}\` ` +
+    if ((MODE === 'production' || MODE === 'development') && created) {
+      const v = MODE === 'production' ? 'HERENOW_PROD_SLUG' : 'HERENOW_DEV_SLUG';
+      lines.push('', `**First ${MODE} deploy.** Set repository variable \`${v}\` to \`${slug}\` ` +
         '(Settings > Secrets and variables > Actions > Variables) so future merges update this site instead of failing.');
     }
     fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);

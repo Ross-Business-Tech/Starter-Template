@@ -24,7 +24,7 @@ Never print, `cat`, or copy `~/.herenow/credentials` or any API key into the cha
 
 ## Before starting a task
 
-Run `git fetch origin main` and, if this branch is behind, `git merge origin/main`, so you build on the team's latest work. A brand-new session already starts from it.
+Run `git fetch origin development` and, if this branch is behind, `git merge origin/development`, so you build on the team's latest work. A brand-new session already starts from it.
 
 ## The loop: run this after every change they can see
 
@@ -40,12 +40,12 @@ The student cannot open `localhost` or a dev server from this session. The publi
 
 ## Sharing work and going live
 
-- **Never publish production yourself.** `production` runs only in GitHub Actions after a pull request is merged into `main`; the script refuses to run it here.
+- **Never publish production or the dev site yourself, and never push to `main`.** The team's work comes together on the `development` branch: each merged pull request updates the team's private dev site. The public site shows "Coming soon" until staff reveal it at the end by merging `development` into `main`. Both deploys run only in GitHub Actions; the script refuses to run them here.
 - When the student says a change is ready to share with the team:
-  1. `git fetch origin main && git merge origin/main`. Resolve conflicts so that **both** people's work survives, and tell the student in one sentence what you combined.
+  1. `git fetch origin development && git merge origin/development`. Resolve conflicts so that **both** people's work survives, and tell the student in one sentence what you combined.
   2. Run the loop again.
-  3. Push and open a pull request with the built-in GitHub tools (in cloud sessions `gh pr` is blocked; `gh api repos/{owner}/{repo}/pulls` works). Title: what changed for users. Body: a short plain-language summary, what you tested, and the preview link.
-  4. Tell the student: teammates can try it from the test link in the pull request, then approve and merge it on GitHub. The live app (usually `https://<repo-name>.<HERENOW_WORKSPACE>.here.now/`) updates a few minutes after the merge.
+  3. Push and open a pull request **into `development`** with the built-in GitHub tools (in cloud sessions `gh pr` is blocked; `gh api repos/{owner}/{repo}/pulls` works). Title: what changed for users. Body: a short plain-language summary, what you tested, and the preview link.
+  4. Tell the student: teammates can try it from the test link in the pull request, then approve and merge it on GitHub. A few minutes after the merge, the team's dev site (the private link their instructor gave them) updates. The public site stays "Coming soon" until the reveal.
 - Keep each pull request focused on one change so teammates can review it and so conflicts stay small.
 
 ## What here.now can and cannot host
@@ -54,8 +54,8 @@ here.now hosts **static websites**: the HTML, CSS, JavaScript and images that `n
 
 - **No server code.** No Express, no Next.js server features, no database server, no background jobs. Everything runs in the visitor's browser.
 - **Keep asset paths root-relative** (`/assets/...`, Vite's default). Client-side routing works because SPA mode is on.
-- **Saving data shared between visitors** (sign-ups, votes, feedback): use here.now **Site Data**. Declare collections in `public/.herenow/data.json`; the browser calls the relative path `./.herenow/data/<collection>`. It only works on account-owned sites (PR previews and the live app), not on anonymous 24-hour previews or in the smoke test, so the app must handle a failed request gracefully with a friendly message. Treat stored records as untrusted input: escape them before showing them.
-- **Calling paid APIs** (an AI model, a maps service with a secret key): never put a secret key in the code. Anything in the website is public, and the publish script blocks common key formats. Use a here.now **proxy route** in `public/.herenow/proxy.json` that references a variable like `${OPENROUTER_API_KEY}`. Tell the student their instructor must add that variable to the here.now workspace; you cannot do it from here.
+- **Saving data shared between visitors** (sign-ups, votes, feedback): use here.now **Site Data**. Declare collections in `public/.herenow/data.json`; the browser calls the relative path `./.herenow/data/<collection>`. It only works on account-owned sites (the team's dev site and the public site), not on the anonymous 24-hour test links or in the smoke test, so the app must handle a failed request gracefully with a friendly message. Treat stored records as untrusted input: escape them before showing them.
+- **Calling paid APIs** (an AI model, a maps service with a secret key): never put a secret key in the code. Anything in the website is public, and the publish script blocks common key formats. Use a here.now **proxy route** in `public/.herenow/proxy.json` that references a variable like `${OPENROUTER_API_KEY}`. Tell the student their instructor must add that variable in here.now, on both the workspace (public site) and the account that hosts the dev sites; you cannot do it from here.
 
 ## Data and privacy
 

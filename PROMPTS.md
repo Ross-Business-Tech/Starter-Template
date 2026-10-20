@@ -5,7 +5,7 @@ Copy a prompt, replace the parts in `<angle brackets>`, and paste it into Claude
 ## How your team works
 
 1. **One person runs the Kickoff prompt** while the team decides the idea together. Claude builds a first version and opens a *pull request*: a proposed change your teammates can try before it goes live.
-2. **Everyone else reviews it.** Open the test link on your phone, then on GitHub click **Files changed > Review changes > Approve**, and **Merge**. Your live app updates a few minutes later.
+2. **Everyone else reviews it.** Open the test link on your phone, then on GitHub click **Files changed > Review changes > Approve**, and **Merge**. Your team's dev site updates a few minutes later. (Your public address stays "Coming soon" until staff reveal all teams at the end.)
 3. **Then split up.** Each person picks one feature and starts a **new session** for it. New sessions always start from the team's latest version.
 4. **One feature = one session = one pull request.** Small pull requests are easier to review and rarely collide.
 
